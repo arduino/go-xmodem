@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Omegaice/go-xmodem/ymodem"
+	"github.com/arduino/go-xmodem/ymodem"
 	"github.com/spf13/cobra"
 	"github.com/tarm/serial"
 )
