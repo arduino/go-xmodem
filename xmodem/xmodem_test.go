@@ -1,27 +1,17 @@
 package xmodem
 
 import (
-	"log"
 	"testing"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 )
 
-func TestXModem(t *testing.T) {
-	log.SetOutput(GinkgoWriter)
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "XMODEM")
+func TestXModem_CRC16(t *testing.T) {
+	data := []byte{72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100}
+	require.Equal(t, uint16(39210), CRC16(data))
 }
 
-var _ = Describe("XMODEM", func() {
-	It("should calculate the CRC16 correctly", func() {
-		data := []byte{72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100}
-		Ω(CRC16(data)).Should(Equal(uint16(39210)))
-	})
-
-	It("should calculate the CRC16 with a constant correclty", func() {
-		data := []byte{72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100}
-		Ω(CRC16Constant(data, 13)).Should(Equal(uint16(43803)))
-	})
-})
+func TestXModem_CRC16Constant(t *testing.T) {
+	data := []byte{72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100}
+	require.Equal(t, uint16(43803), CRC16Constant(data, 13))
+}

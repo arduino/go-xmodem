@@ -1,14 +1,14 @@
 package main
 
 import (
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"strings"
 
-	"github.com/Omegaice/go-xmodem/ymodem"
+	"github.com/arduino/go-xmodem/ymodem"
 	"github.com/spf13/cobra"
-	"github.com/tarm/serial"
+	"go.bug.st/serial"
 )
 
 var Port, Message, Wait string
@@ -22,7 +22,7 @@ func main() {
 		Long:  ``,
 		Run: func(cmd *cobra.Command, args []string) {
 			// Open connection
-			connection, err := serial.OpenPort(&serial.Config{Name: Port, Baud: 115200})
+			connection, err := serial.Open(Port, &serial.Mode{BaudRate: 115200})
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -59,7 +59,7 @@ func main() {
 				log.Fatalln(err)
 			}
 
-			data, err := ioutil.ReadAll(fIn)
+			data, err := io.ReadAll(fIn)
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -84,7 +84,7 @@ func main() {
 		Long:  ``,
 		Run: func(cmd *cobra.Command, args []string) {
 			// Open connection
-			connection, err := serial.OpenPort(&serial.Config{Name: Port, Baud: 115200})
+			connection, err := serial.Open(Port, &serial.Mode{BaudRate: 115200})
 			if err != nil {
 				log.Fatalln(err)
 			}
