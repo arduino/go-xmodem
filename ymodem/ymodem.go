@@ -5,20 +5,39 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
+	"runtime"
+	"time"
 )
 
-const SOH byte = 0x01
-const STX byte = 0x02
-const EOT byte = 0x04
-const ACK byte = 0x06
-const NAK byte = 0x15
-const POLL byte = 0x43
+// ymodem constants
+const (
+	SOH  byte = 0x01
+	STX  byte = 0x02
+	EOT  byte = 0x04
+	ACK  byte = 0x06
+	NAK  byte = 0x15
+	POLL byte = 0x43
 
-const SHORT_PACKET_PAYLOAD_LEN = 128
-const LONG_PACKET_PAYLOAD_LEN = 1024
+	ShortPacketPayloadLen = 128
+)
 
-var InvalidPacket = errors.New("invalid packet")
+// default errors
+var (
+	LongPacketPayloadLen = getLongPacketPayloadLen()
 
+	ErrInvalidPacket   = errors.New("invalid packet")
+	ErrSendingEndBlock = errors.New("failed to send end block")
+)
+
+func getLongPacketPayloadLen() int {
+	if runtime.GOOS == "darwin" {
+		return 128
+	}
+	return 1024
+}
+
+// CRC16 calculate crc16
 func CRC16(data []byte) uint16 {
 	var u16CRC uint16 = 0
 
@@ -38,6 +57,7 @@ func CRC16(data []byte) uint16 {
 	return u16CRC
 }
 
+// CRC16Constant calculate constant crc16
 func CRC16Constant(data []byte, length int) uint16 {
 	var u16CRC uint16 = 0
 
@@ -68,42 +88,48 @@ func CRC16Constant(data []byte, length int) uint16 {
 	return u16CRC
 }
 
-func sendBlock(c io.ReadWriter, block uint8, data []byte) error {
-	//send STX
-	if _, err := c.Write([]byte{STX}); err != nil {
+func sendBlock(c io.ReadWriter, block uint16, data []byte) error {
+	if runtime.GOOS == "darwin" {
+		if _, err := c.Write([]byte{SOH}); err != nil {
+			return err
+		}
+	} else {
+		if _, err := c.Write([]byte{STX}); err != nil {
+			return err
+		}
+	}
+	if _, err := c.Write([]byte{uint8(block)}); err != nil {
 		return err
 	}
-	if _, err := c.Write([]byte{block}); err != nil {
-		return err
-	}
-	if _, err := c.Write([]byte{255 - block}); err != nil {
+	if _, err := c.Write([]byte{255 - uint8(block)}); err != nil {
 		return err
 	}
 
 	//send data
 	var toSend bytes.Buffer
 	toSend.Write(data)
-	for toSend.Len() < LONG_PACKET_PAYLOAD_LEN {
+	for toSend.Len() < LongPacketPayloadLen {
 		toSend.Write([]byte{EOT})
 	}
 
 	//calc CRC
-	u16CRC := CRC16Constant(data, LONG_PACKET_PAYLOAD_LEN)
+	u16CRC := CRC16Constant(data, LongPacketPayloadLen)
 	toSend.Write([]byte{uint8(u16CRC >> 8)})
 	toSend.Write([]byte{uint8(u16CRC & 0x0FF)})
 
 	sent := 0
 	for sent < toSend.Len() {
-		if n, err := c.Write(toSend.Bytes()[sent:]); err != nil {
+		n, err := c.Write(toSend.Bytes()[sent:])
+		if err != nil {
 			return err
-		} else {
-			sent += n
 		}
+		sent += n
 	}
 
 	return nil
 }
 
+// ModemSend sends given file data to the stream.
 func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 	oBuffer := make([]byte, 1)
 
@@ -115,10 +141,10 @@ func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 	// Send zero block with filename and size
 	if oBuffer[0] == POLL {
 		var send bytes.Buffer
-		send.WriteString(filename)
+		send.WriteString(filepath.Base(filename))
 		send.WriteByte(0x0)
 		send.WriteString(fmt.Sprintf("%d", len(data)))
-		for send.Len() < LONG_PACKET_PAYLOAD_LEN {
+		for send.Len() < LongPacketPayloadLen {
 			send.Write([]byte{0x0})
 		}
 
@@ -130,7 +156,7 @@ func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 		}
 
 		if oBuffer[0] != ACK {
-			return errors.New("Failed to send header block")
+			return fmt.Errorf("failed to send header block: %x", oBuffer[0])
 		}
 	}
 
@@ -141,20 +167,23 @@ func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 
 	// Send remaining data
 	if oBuffer[0] == POLL {
-		var blocks uint8 = uint8(len(data) / LONG_PACKET_PAYLOAD_LEN)
-		if len(data) > int(int(blocks)*int(LONG_PACKET_PAYLOAD_LEN)) {
+		blocks := uint16(len(data) / LongPacketPayloadLen)
+		if len(data) > int(int(blocks)*int(LongPacketPayloadLen)) {
 			blocks++
 		}
 
 		failed := 0
-		var currentBlock uint8 = 0
+		var currentBlock uint16 = 0
 		for currentBlock < blocks && failed < 10 {
-			if int(int(currentBlock+1)*int(LONG_PACKET_PAYLOAD_LEN)) > len(data) {
-				sendBlock(c, currentBlock+1, data[int(currentBlock)*int(LONG_PACKET_PAYLOAD_LEN):])
+			if int(int(currentBlock+1)*int(LongPacketPayloadLen)) > len(data) {
+				sendBlock(c, currentBlock+1, data[int(currentBlock)*int(LongPacketPayloadLen):])
 			} else {
-				sendBlock(c, currentBlock+1, data[int(currentBlock)*int(LONG_PACKET_PAYLOAD_LEN):(int(currentBlock)+1)*int(LONG_PACKET_PAYLOAD_LEN)])
+				sendBlock(c, currentBlock+1, data[int(currentBlock)*int(LongPacketPayloadLen):(int(currentBlock)+1)*int(LongPacketPayloadLen)])
 			}
 
+			if runtime.GOOS == "windows" {
+				time.Sleep(50 * time.Millisecond)
+			}
 			if _, err := c.Read(oBuffer); err != nil {
 				return err
 			}
@@ -177,7 +206,7 @@ func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 	}
 
 	if oBuffer[0] != NAK {
-		return errors.New("")
+		return errors.New("didn't get a nak when expected")
 	}
 
 	// Send EOT again
@@ -190,7 +219,7 @@ func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 	}
 
 	if oBuffer[0] != ACK {
-		return errors.New("Failed to send end block")
+		return ErrSendingEndBlock
 	}
 
 	// Wait for POLL
@@ -199,12 +228,12 @@ func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 	}
 
 	if oBuffer[0] != POLL {
-		return errors.New("Failed to send end block")
+		return ErrSendingEndBlock
 	}
 
 	// Send empty block to signify end
 	var zero bytes.Buffer
-	for zero.Len() < LONG_PACKET_PAYLOAD_LEN {
+	for zero.Len() < LongPacketPayloadLen {
 		zero.Write([]byte{0x0})
 	}
 
@@ -216,7 +245,7 @@ func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 	}
 
 	if oBuffer[0] != ACK {
-		return errors.New("Failed to send end block")
+		return ErrSendingEndBlock
 	}
 
 	return nil
@@ -224,7 +253,7 @@ func ModemSend(c io.ReadWriter, data []byte, filename string) error {
 
 func receivePacket(c io.ReadWriter) ([]byte, error) {
 	oBuffer := make([]byte, 1)
-	dBuffer := make([]byte, LONG_PACKET_PAYLOAD_LEN)
+	//dBuffer := make([]byte, LONG_PACKET_PAYLOAD_LEN)
 
 	if _, err := c.Read(oBuffer); err != nil {
 		return nil, err
@@ -238,11 +267,9 @@ func receivePacket(c io.ReadWriter) ([]byte, error) {
 	var packetSize int
 	switch pType {
 	case SOH:
-		packetSize = SHORT_PACKET_PAYLOAD_LEN
-		break
+		packetSize = ShortPacketPayloadLen
 	case STX:
-		packetSize = LONG_PACKET_PAYLOAD_LEN
-		break
+		packetSize = LongPacketPayloadLen
 	}
 
 	if _, err := c.Read(oBuffer); err != nil {
@@ -255,23 +282,26 @@ func receivePacket(c io.ReadWriter) ([]byte, error) {
 	}
 	inverseCount := oBuffer[0]
 
-	if packetCount > inverseCount || inverseCount+packetCount != 255 {
+	if inverseCount+packetCount != 255 {
 		if _, err := c.Write([]byte{NAK}); err != nil {
 			return nil, err
 		}
-		return nil, InvalidPacket
+		return nil, ErrInvalidPacket
 	}
 
 	received := 0
 	var pData bytes.Buffer
+
 	for received < packetSize {
-		n, err := c.Read(dBuffer)
+		tempBuffer := make([]byte, packetSize-received)
+
+		n, err := c.Read(tempBuffer)
 		if err != nil {
 			return nil, err
 		}
 
 		received += n
-		pData.Write(dBuffer[:n])
+		pData.Write(tempBuffer[:n])
 	}
 
 	var crc uint16
@@ -286,7 +316,6 @@ func receivePacket(c io.ReadWriter) ([]byte, error) {
 	crc <<= 8
 	crc |= uint16(oBuffer[0])
 
-	// Calculate CRC
 	crcCalc := CRC16(pData.Bytes())
 	if crcCalc != crc {
 		if _, err := c.Write([]byte{NAK}); err != nil {
@@ -301,6 +330,7 @@ func receivePacket(c io.ReadWriter) ([]byte, error) {
 	return pData.Bytes(), nil
 }
 
+// ModemReceive nodoc
 func ModemReceive(c io.ReadWriter) (string, []byte, error) {
 	var data bytes.Buffer
 
@@ -328,7 +358,7 @@ func ModemReceive(c io.ReadWriter) (string, []byte, error) {
 	// Read Packets
 	for {
 		pktData, err := receivePacket(c)
-		if err == InvalidPacket {
+		if err == ErrInvalidPacket {
 			continue
 		}
 
