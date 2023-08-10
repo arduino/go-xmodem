@@ -22,10 +22,10 @@ const (
 	ShortPacketPayloadLen = 128
 )
 
-// default errors
 var (
 	LongPacketPayloadLen = getLongPacketPayloadLen()
 
+    // default errors
 	ErrInvalidPacket   = errors.New("invalid packet")
 	ErrSendingEndBlock = errors.New("failed to send end block")
 )
